@@ -1,0 +1,34 @@
+Tóm tắt toàn bộ context — Chuyển đổi NAFNet sang ONNX cho mobile
+Bối cảnh dự án
+Repo: NAFNet (Nonlinear Activation Free Network) — image restoration (denoise/deblur), tại d:\FITHOU\Thạc sỹ\Luận văn\code\NAFNet
+Mục tiêu: convert checkpoint .pth (PyTorch) → .onnx để tích hợp vào app mobile (do máy local không có GPU, dùng Google Colab)
+Đã tạo 3 file: convert_to_onnx.ipynb, test_onnx_quality.ipynb, README_convert_to_onnx.md
+File 1: convert_to_onnx.ipynb (pipeline "sản xuất" — chỉ convert)
+8 bước: Kiểm tra GPU → Mount Drive → Clone repo (KHÔNG dùng --depth 1, KHÔNG chạy setup.py develop — tránh lỗi KeyError: __version__) → Config (CHECKPOINT_PATH + PRESET phải khớp nhau) → Build+load checkpoint (dùng NAFNet, không dùng NAFNetLocal vì khó export) → Export ONNX (dynamo=False để tránh cần onnxscript) → Simplify (dùng Python API onnxsim.simplify() thay vì CLI — CLI bị crash ở bước in bảng thống kê) → Verify (so PyTorch vs ONNX, ngưỡng đã nới mean_diff<5e-3, max_diff<0.15 cho phù hợp model lớn).
+
+Các PRESET đúng (lấy từ options/train/*/NAFNet-*.yml):
+
+sidd_width32/64: enc=[2,2,4,8] mid=12 dec=[2,2,2,2]
+gopro_width32/64, reds_width64: enc=[1,1,1,28] mid=1 dec=[1,1,1,1]
+File 2: test_onnx_quality.ipynb (kiểm chứng chất lượng — độc lập, tự load lại .onnx đã lưu)
+10+ bước: Mount Drive → Clone+cài đặt → Config phải nhập lại thủ công khớp với file convert → Load ONNX session + build NAFNetLocal (kiến trúc gốc có TLC, dùng để đối chiếu) → Hàm dùng chung (run_tiled_inference, run_local_full, show_and_report) → Test ảnh thật (upload/Drive) bằng cách chia tile 256×256 không chồng lấp (pad reflect, ghép lại, cắt về size gốc — không resize để tránh mất chi tiết) → Đối chiếu demo/blurry.jpg chính thức → Phép thử quyết định: so ONNX+tile vs NAFNetLocal full-ảnh PyTorch thuần → Zoom crop 1 vùng cụ thể (quan trọng: ảnh full-size bị thu nhỏ khi hiển thị dễ gây ảo giác "không đổi gì") → Test bằng input.lmdb/target.lmdb chính thức (link: https://drive.google.com/file/d/1abXSfeRGrzj2mQ2n2vIBHtObU6vXvr7C) → PSNR/SSIM thật (dùng basicsr.metrics.psnr_ssim.calculate_psnr/ssim, crop_border=0) trên 1 ảnh → Bước 10b: batch evaluation trung bình N ảnh (N_SAMPLES, EVAL_NAFNETLOCAL để bật/tắt so sánh NAFNetLocal).
+
+Lịch sử debug quan trọng (đã giải quyết theo thứ tự)
+KeyError: __version__ khi setup.py develop → bỏ hẳn bước này
+Sai PRESET (SIDD vs GoPro có block structure khác nhau) → gây size mismatch
+ModuleNotFoundError: onnxscript → thêm dynamo=False
+onnxsim CLI crash (sympy.factor với Tile/ConstantOfShape) → dùng Python API
+Nhầm lẫn giữa "resize" (mất chi tiết, gây mờ giả) vs "crop/tile" (giữ nguyên pixel) — repo gốc demo.py không hề resize
+Threshold verify quá chặt cho model lớn (width64) → nới ngưỡng
+Điều tra dài "ảnh vẫn mờ sau deblur": loại trừ lần lượt — sai checkpoint (test bằng file size + weight stats), domain-gap (test bằng demo/blurry.jpg), thiếu TLC/NAFNetLocal (test bằng NAFNetLocal full-ảnh PyTorch thuần), sai checkpoint Baseline (loại bằng cách so tên layer sca vs se) → Kết luận cuối: pipeline convert đúng, model có cải thiện thật nhưng tinh tế (mean_abs_diff ~0.017), chỉ khó thấy bằng mắt khi ảnh full-size bị thu nhỏ — zoom crop mới thấy rõ. GIF deblur.gif dùng ảnh KHÁC hoàn toàn (không phải demo/blurry.jpg) và hiệu ứng nhấp nháy phóng đại cảm nhận khác biệt.
+Kiến thức đã giải thích cho user
+Train set (raw pairs) vs test set (lmdb, để evaluate) — mục đích khác nhau
+lmdb chỉ dùng để nghiên cứu/benchmark, KHÔNG dùng trong app thực tế (app chỉ cần ảnh JPEG thường → tile → ONNX)
+PSNR/SSIM là gì, cách đọc, giới hạn (1 ảnh vs trung bình toàn tập)
+GPU không cần thiết cho convert/inference ONNX (chỉ cần cho training)
+Cơ chế tile: pad reflect → chia lưới → chạy từng tile → ghép → cắt về size gốc; nhược điểm là seam ở biên tile (đã đề xuất overlapping tile nếu cần chất lượng cao hơn, chưa triển khai)
+Việc chưa làm / có thể tiếp tục
+Chưa triển khai overlapping-tile + blend biên (đã đề xuất, user chưa yêu cầu làm)
+Chưa chạy batch evaluation PSNR trung bình thật sự (vừa viết code xong, user chưa báo kết quả)
+Chưa bắt đầu bước tích hợp .onnx vào app Android/iOS thực tế (đã tư vấn hướng: ONNX Runtime Mobile, hoặc convert tiếp sang CoreML/TFLite)
+User dùng attribution: Co-Authored-By: Claude Sonnet 5 <noreply@anthropic.com> khi commit (chưa có commit nào được tạo trong session này)
